@@ -1,0 +1,101 @@
+openapi: 3.0.0
+servers:
+  - url: http://localhost:3000
+    description: Local server
+  - url: https://api.example.com
+    description: Production server
+tags:
+  - name: Users
+    description: Operations related to users
+info:
+  title: A sample API for getting info about users
+  description: This is a simple API that returns stub user information.
+  version: 1.0.0
+paths:
+  /users:
+    get:
+      operationId: getUsers
+      summary: Retrieve a list of users
+      description: Get a list of users
+      tags:
+        - Users
+      responses:
+        '200':
+          description: A list of users
+          content:
+            application/json:
+              example:
+                users:
+                  - id: 1
+                    name: John Doe
+                    email: "john@example.com"
+                  - id: 2
+                    name: Jane Smith
+                    email: "jane@example.com"
+    post:
+      operationId: createUser
+      summary: Create a new user
+      description: Create a new user in the backend
+      tags:
+        - Users
+      requestBody:
+        description: User object that needs to be added
+        required: true
+        content:
+          application/json:
+            example:
+              name: John Doe
+              email: "john@example.com"
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: John Doe
+                email:
+                  type: string
+                  format: email
+                  example: "john@example.com"
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              example:
+                id: 3
+                name: "New User"
+                email: "newuser@example.com"
+                created: true
+  /users/{id}:
+    get:
+      summary: Get user by ID
+      operationId: getUserbyId
+      description: Obtain users by id
+      tags:
+        - Users
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID of the user to retrieve
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: User found
+          content:
+            application/json:
+              example:
+                id: 1
+                name: John Doe
+                email: "john@example.com"
+                profile:
+                  age: 30
+                  address: "123 Main St"
+                  phone: "555-1234"
+        '404':
+          description: User not found
+          content:
+            application/json:
+              example:
+                error: User not found

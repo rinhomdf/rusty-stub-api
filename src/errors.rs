@@ -10,4 +10,7 @@ pub enum AppError {
 
     #[error("YAML parsing error: {0}")]
     YamlError(#[from] serde_yaml::Error),
+
+    #[error("Internal server error: {0}")]
+    InternalSeverError(#[from] actix_web::Error),
 }

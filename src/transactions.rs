@@ -1,6 +1,6 @@
 use crate::data::app::{AppState, EndpointHandler};
 use crate::errors::AppError;
-use actix_web::{web, HttpResponse, Responder};
+use actix_web::{web, HttpResponse, Responder, Result as ActixResult};
 use anyhow::Result;
 use log::{info, warn};
 use openapiv3::{OpenAPI, Operation, ReferenceOr, Response};
@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::{collections::HashMap, sync::Arc};
 
-async fn health_check() -> impl Responder {
+pub async fn health_check() -> impl Responder {
     HttpResponse::Ok().json(serde_json::json!({
         "status": "healthy",
         "version": env!("CARGO_PKG_VERSION"),
@@ -16,7 +16,109 @@ async fn health_check() -> impl Responder {
 }
 
 // Endpoint to show the loaded OpenAPI spec
-async fn show_openapi_spec(app_state: web::Data<Arc<AppState>>) -> impl Responder {
+async fn serve_openapi_yaml(app_state: web::Data<Arc<AppState>>) -> ActixResult<HttpResponse> {
+    let yaml_content = serde_yaml::to_string(&app_state.openapi_spec)
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+
+    Ok(HttpResponse::Ok()
+        .content_type("application/json")
+        .body(yaml_content))
+}
+
+pub async fn api_redirect(
+    req: actix_web::HttpRequest,
+    body: web::Bytes,
+    app_state: web::Data<Arc<AppState>>,
+) -> impl Responder {
+    let path = req.uri().path().trim_start_matches("/api");
+    let method = req.method().as_str().to_lowercase();
+
+    info!("API redirect: {} {}", method, path);
+
+    // Find matching endpoint
+    for endpoint in &app_state.endpoints {
+        if endpoint.method.to_lowercase() == method {
+            // Check if paths match (including path params)
+            if paths_match(&endpoint.path, path, &endpoint.path_params) {
+                // Return the stored response with status code
+                let status_code = endpoint.response_code.parse::<u16>().unwrap_or(200);
+
+                return HttpResponse::build(
+                    actix_web::http::StatusCode::from_u16(status_code).unwrap(),
+                )
+                .content_type("application/json")
+                .json(&endpoint.response_body);
+            }
+        }
+    }
+
+    // If no matching endpoint found
+    HttpResponse::NotFound().json(serde_json::json!({
+        "error": "Endpoint not found",
+        "path": path,
+        "method": method,
+    }))
+}
+
+pub async fn swagger_ui() -> ActixResult<HttpResponse> {
+    // TODO: This is bolierplate from AI chat maybe a more elegant solution can be used ...
+    let html = r#"<!DOCTYPE html>
+    <html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Swagger UI</title>
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui.css" />
+    <link rel="icon" type="image/png" href="https://unpkg.com/swagger-ui-dist@4.5.0/favicon-32x32.png" sizes="32x32" />
+    <link rel="icon" type="image/png" href="https://unpkg.com/swagger-ui-dist@4.5.0/favicon-16x16.png" sizes="16x16" />
+    <style>
+        html { box-sizing: border-box; overflow: -moz-scrollbars-vertical; overflow-y: scroll; }
+        *, *:before, *:after { box-sizing: inherit; }
+        body { margin: 0; background: #fafafa; }
+    </style>
+</head>
+<body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui-bundle.js"></script>
+    <script src="https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui-standalone-preset.js"></script>
+    <script>
+    window.onload = function() {
+        const ui = SwaggerUIBundle({
+            url: "/api/openapi.json",
+            // Use our API server URL for requests
+            // This makes "Try it out" in Swagger UI work with our mock server
+            requestInterceptor: (req) => {
+                // Rewrite URLs to use our API endpoints
+                if (req.url.startsWith('http://') || req.url.startsWith('https://')) {
+                    const url = new URL(req.url);
+                    const path = url.pathname;
+                    // Rewrite to use our /api prefix
+                    req.url = '/api' + path;
+                }
+                return req;
+            },
+            dom_id: '#swagger-ui',
+            deepLinking: true,
+            presets: [
+                SwaggerUIBundle.presets.apis,
+                SwaggerUIStandalonePreset
+            ],
+            plugins: [
+                SwaggerUIBundle.plugins.DownloadUrl
+            ],
+            layout: "StandaloneLayout"
+        });
+        window.ui = ui;
+    };
+    </script>
+</body>
+</html>"#;
+
+    Ok(HttpResponse::Ok()
+        .content_type("text/html; charset=utf-8")
+        .body(html))
+}
+
+pub async fn show_openapi_spec(app_state: web::Data<Arc<AppState>>) -> impl Responder {
     let spec_json = serde_json::to_value(&app_state.openapi_spec).unwrap_or(serde_json::json!({
         "error": "Failed to serialize OpenAPI spec"
     }));
@@ -24,7 +126,7 @@ async fn show_openapi_spec(app_state: web::Data<Arc<AppState>>) -> impl Responde
     HttpResponse::Ok().json(spec_json)
 }
 
-async fn list_endpoints(app_state: web::Data<Arc<AppState>>) -> impl Responder {
+pub async fn list_endpoints(app_state: web::Data<Arc<AppState>>) -> impl Responder {
     let endpoints: Vec<serde_json::Value> = app_state
         .endpoints
         .iter()
@@ -53,7 +155,7 @@ pub async fn dynamic_handler(
     let (path_str, method_str) = req_path.into_inner();
     let method_str = method_str.to_lowercase();
 
-    info!("Received request: {}", path_str);
+    info!("Handling request: {} {}", method_str, path_str);
 
     for endpoint in &app_state.endpoints {
         if endpoint.method.to_lowercase() == method_str {
@@ -76,6 +178,7 @@ pub async fn dynamic_handler(
     HttpResponse::NotFound().json(serde_json::json!({
         "error": "Endpoint not found",
         "path": path_str,
+        "method": method_str,
     }))
 }
 
@@ -110,7 +213,7 @@ fn paths_match(api_path: &str, request_path: &str, path_params: &[String]) -> bo
     }
 }
 
-pub fn build_endpoints_from_spec(spec_path: &Path) -> Result<Vec<EndpointHandler>, AppError> {
+pub fn build_endpoints_from_spec(spec_path: &Path) -> Result<(Vec<EndpointHandler>), AppError> {
     let yaml_content = std::fs::read_to_string(spec_path)?;
 
     // Parse the YAML into OpenAPI spec

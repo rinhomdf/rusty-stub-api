@@ -8,7 +8,7 @@ use clap::Parser;
 )]
 pub struct Args {
     /// Path to the OpenAPI YAML specification file
-    #[clap(short, long, default_value = "api-spec.yaml")]
+    #[clap(long, default_value = "api-spec.yaml")]
     pub spec: String,
 
     /// Port to listen on
@@ -16,6 +16,6 @@ pub struct Args {
     pub port: u16,
 
     /// Host to bind to
-    #[clap(short, long, default_value = "127.0.0.1")]
+    #[clap(short = 's', long = "server", default_value = "127.0.0.1")]
     pub host: String,
 }
